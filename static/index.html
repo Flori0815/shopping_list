@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Family Shop</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f4f9; padding: 20px; max-width: 600px; margin: 0 auto; }
+        h1 { font-size: 24px; text-align: center; color: #333; margin-bottom: 20px; }
+        
+        /* Input Area */
+        .input-group { display: flex; gap: 10px; margin-bottom: 20px; }
+        input { flex: 1; padding: 15px; border: 1px solid #ddd; border-radius: 12px; font-size: 16px; outline: none; }
+        button { background: #007bff; color: white; border: none; padding: 15px 25px; border-radius: 12px; font-weight: bold; font-size: 16px; cursor: pointer; }
+        button:active { transform: scale(0.98); }
+
+        /* List Area */
+        ul { list-style: none; padding: 0; }
+        li { background: white; padding: 15px; margin-bottom: 8px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .status { font-size: 12px; font-weight: bold; margin-left: 10px; }
+        .pending { color: orange; }
+        .synced { color: green; }
+        .delete-btn { color: #999; font-size: 20px; cursor: pointer; padding: 5px; }
+        
+        /* Offline Warning */
+        #offline-mode { background: #ff4444; color: white; text-align: center; padding: 5px; border-radius: 4px; font-size: 12px; display: none; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="offline-mode">You are Offline. Changes saved locally.</div>
+    <h1>🛒 Shopping List</h1>
+    
+    <div class="input-group">
+        <input type="text" id="itemInput" placeholder="Add item (e.g. Milk)...">
+        <button onclick="addItem()">Add</button>
+    </div>
+
+    <ul id="list"></ul>
+
+    <script>
+        // --- CONFIGURATION ---
+        // 1. Paste your Web App URL here. 
+        // IMPORTANT: Ensure your script ends with .setMimeType(ContentService.MimeType.JSON)
+        const API_URL = "https://script.google.com/macros/s/YOUR_SCRIPT_ID_HERE/exec";
+
+        // --- PWA SETUP ---
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js')
+                .then(() => console.log('Service Worker Registered (Offline Ready)'));
+        }
+
+        // --- APP LOGIC ---
+        const CACHE_KEY = 'shop_items';
+
+        window.onload = () => {
+            render();
+            sync(); // Try to sync on load
+        };
+
+        window.addEventListener('online', sync);
+        window.addEventListener('offline', () => document.getElementById('offline-mode').style.display = 'block');
+
+        function getLocal() { return JSON.parse(localStorage.getItem(CACHE_KEY) || "[]"); }
+        function setLocal(data) { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); }
+
+        function render() {
+            const items = getLocal();
+            const list = document.getElementById('list');
+            list.innerHTML = items.map(i => `
+                <li>
+                    <span>${i.name}</span>
+                    <span class="status ${i.synced ? 'synced' : 'pending'}">
+                        ${i.synced ? '✔' : '⏳'}
+                    </span>
+                </li>
+            `).join('');
+        }
+
+        function addItem() {
+            const input = document.getElementById('itemInput');
+            const val = input.value.trim();
+            if (!val) return;
+
+            // 1. Optimistic UI: Save locally immediately
+            const items = getLocal();
+            items.push({ name: val, synced: false });
+            setLocal(items);
+            render();
+            input.value = "";
+
+            // 2. Try to sync
+            sync();
+        }
+
+        async function sync() {
+            if (!navigator.onLine) {
+                document.getElementById('offline-mode').style.display = 'block';
+                return;
+            }
+            document.getElementById('offline-mode').style.display = 'none';
+
+            // A. Send Pending Items
+            let items = getLocal();
+            for (let i = 0; i < items.length; i++) {
+                if (!items[i].synced) {
+                    try {
+                        // Using GET to avoid CORS preflight issues
+                        await fetch(`${API_URL}?action=add&item=${encodeURIComponent(items[i].name)}`);
+                        items[i].synced = true; 
+                    } catch (e) { console.log("Sync failed for", items[i].name); }
+                }
+            }
+            setLocal(items);
+
+            // B. Get Fresh List from Server
+            try {
+                const response = await fetch(`${API_URL}?action=read`);
+                const serverData = await response.json();
+                
+                // Merge Strategy: Server data + Local Pending items
+                const pendingItems = items.filter(i => !i.synced);
+                const freshItems = serverData.map(name => ({ name: name, synced: true }));
+                
+                setLocal([...freshItems, ...pendingItems]);
+                render();
+            } catch (e) { console.log("Fetch failed"); }
+        }
+    </script>
+</body>
+</html>
